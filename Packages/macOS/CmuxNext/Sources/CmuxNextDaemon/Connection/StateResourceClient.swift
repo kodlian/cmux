@@ -34,11 +34,11 @@ extension StateResourceClient {
     /// Sends one state mutation and returns its `value`.
     @discardableResult
     func stateMutation<R: Decodable & Sendable>(_ operation: String, _ params: [String: JSONValue],
-                                                 as type: R.Type = JSONValue.self) async throws -> R {
+                                                 as type: R.Type = JSONValue.self, requiring capability: String? = nil) async throws -> R {
         let key = Self.stateKey()
         return try await connection.resourceRequest({ id in
             ResourceRequestEnvelope(id: id, operation: operation, params: params, idempotencyKey: key)
-        }, as: ResourceMutationResult<R>.self).value
+        }, as: ResourceMutationResult<R>.self, requiring: capability).value
     }
 
     static func ids(_ ids: [ResourceID]) -> JSONValue { .array(ids.map { .string($0.rawValue) }) }
@@ -227,6 +227,6 @@ extension StateResourceClient {
         Self.field(icon, into: &params, "icon") { .string($0) }
         if let back { params["back"] = .array(back.suffix(20).map { .string($0) }) }
         if let forward { params["forward"] = .array(forward.prefix(20).map { .string($0) }) }
-        try await stateMutation("tab.update", params)
+        try await stateMutation("tab.update", params, requiring: attentionRequestID == nil ? nil : DaemonCapability.tabAttentionRequestID.rawValue)
     }
 }
