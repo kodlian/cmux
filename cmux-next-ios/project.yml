@@ -139,6 +139,8 @@ packages:
     path: ../Packages/Shared/CmuxChiefVoiceCore
   CmuxConversation:
     path: ../Packages/iOS/CmuxConversation
+  CmuxScreenKit:
+    path: ../Packages/Shared/CmuxScreenKit
 targets:
   CmuxMobileApp:
     type: application
@@ -161,6 +163,8 @@ targets:
       - package: CmuxMobileKit
         product: CmuxMobileChief
       - package: CmuxChiefVoiceCore
+      - package: CmuxScreenKit
+        product: CmuxScreenKitUI
       # Long-press view of every cmux notification (verify/rich-push.md).
       - target: CmuxMobileNotificationContent
       # Opens sealed pushes (verify/notifications-trust.md).
