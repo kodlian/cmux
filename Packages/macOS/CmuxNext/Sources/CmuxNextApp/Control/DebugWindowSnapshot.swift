@@ -117,7 +117,7 @@ enum DebugWindowSnapshot {
         // reports them as occluded and returns a blank standalone image. Use the existing DEBUG
         // palette renderer for the named-window capture route so a real palette fixture records
         // the panel's content without requiring Screen Recording permission.
-        if window is PalettePanel { return DebugPaletteCapture.capture(params, services: services) }
+        if services.palette.owns(window) { return DebugPaletteCapture.capture(params, services: services) }
 #endif
         let kind = kind(of: window, services: services)
         let path = params["path"]?.stringValue.map { ($0 as NSString).expandingTildeInPath }
