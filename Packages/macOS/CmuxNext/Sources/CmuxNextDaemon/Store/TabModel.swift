@@ -103,7 +103,7 @@ public final class TabModel: Identifiable {
 
     /// Hide the request in the action's own turn. The returned token identifies this clear.
     public func expectAttentionClear() -> TabAttention? {
-        guard let attention else { return nil }
+        guard let attention, let requestID = attention.requestID, TabAttention.validRequestID(requestID) else { return nil }
         pendingAttentionClear = attention
         self.attention = nil
         return attention
@@ -115,11 +115,11 @@ public final class TabModel: Identifiable {
         pendingAttentionClear = nil
         attention = recordAttention
     }
-    /// This app's own view state, never sent to the daemon: the `at_ms` of the newest
-    /// ``attention`` request whose ring the person hid (went into the tab, or Dismiss
-    /// Highlight). A newer request rings again. It lives on the model, which belongs to one
-    /// machine's store, so tabs on two machines that share an id never share it.
+    /// Client-local generation of the request whose ring the person hid. This never stores time.
     public var attentionRingHiddenThrough: UInt64?
+    /// A local render identity changes when the owner request changes; TabAttention equality
+    /// includes requestID, so identical reason/time replacements are still distinct.
+    public private(set) var attentionGeneration: UInt64 = 0
 
     /// Counts the times ``markedUnread`` turned on: each new mark is a new unread, so a ring
     /// dismissed for an earlier mark shows again. Changes only with ``markedUnread``, which
@@ -344,6 +344,7 @@ public final class TabModel: Identifiable {
         if zoom != record.zoom { zoom = record.zoom }
         if userIcon != record.icon { userIcon = record.icon }
         if emulation != record.emulation { emulation = record.emulation }
+        if recordAttention != record.attention { attentionGeneration &+= 1 }
         recordAttention = record.attention
         if pendingAttentionClear != record.attention { pendingAttentionClear = nil }
         let shownAttention = pendingAttentionClear == nil ? record.attention : nil

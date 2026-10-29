@@ -214,12 +214,15 @@ extension StateResourceClient {
     /// The tab record's zoom, user icon and a browser tab's back/forward lists (`tab.update`).
     public func updateTabRecord(_ tab: ResourceID, zoom: FieldUpdate<Double> = .unchanged, icon: FieldUpdate<String> = .unchanged,
                                 back: [String]? = nil, forward: [String]? = nil, markedUnread: Bool? = nil,
-                                clearsAttention: Bool = false) async throws {
+                                attentionRequestID: String? = nil) async throws {
         var params: [String: JSONValue] = ["tab": .string(tab.rawValue)]
         // tab-mark-unread-v1: the caller checks the capability; an older daemon refuses the field.
         if let markedUnread { params["marked_unread"] = .bool(markedUnread) }
-        // tab-attention-v1: the person read the tab an agent marked; the caller checks the capability.
-        if clearsAttention { params["attention"] = .null }
+        // tab-attention-request-id-v1: compare-and-clear only the captured owner token.
+        if let attentionRequestID {
+            params["attention"] = .null
+            params["attention_request_id"] = .string(attentionRequestID)
+        }
         Self.field(zoom, into: &params, "zoom") { .number($0) }
         Self.field(icon, into: &params, "icon") { .string($0) }
         if let back { params["back"] = .array(back.suffix(20).map { .string($0) }) }
