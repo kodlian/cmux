@@ -153,8 +153,8 @@ pub(super) async fn write<S>(
 {
     let restarting = tokio::select! {
         biased;
-        () = shutdown.normal() => false,
-        restarting = shutdown.closing_as_restart() => restarting,
+        () = shutdown.normal() => { eprintln!("DIAG writer {}: arm normal", std::process::id()); false },
+        restarting = shutdown.closing_as_restart() => { eprintln!("DIAG writer {}: arm closing requested={restarting} normal={}", std::process::id(), *shutdown.normal.borrow()); restarting },
         () = async {
             loop {
                 let line = tokio::select! {
@@ -167,7 +167,7 @@ pub(super) async fn write<S>(
                     break;
                 }
             }
-        } => false,
+        } => { eprintln!("DIAG writer {}: arm ended (stopped/outbound) requested={} closing={} normal={}", std::process::id(), *shutdown.requested.borrow(), *shutdown.closing.borrow(), *shutdown.normal.borrow()); false },
     };
     close(&mut sink, restarting).await;
 }
