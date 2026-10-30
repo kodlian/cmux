@@ -181,8 +181,9 @@ fn write_synced(path: &Path, contents: &str) -> anyhow::Result<()> {
 /// confirmed (only a rollback writes the failure marker after a swap).
 pub(crate) fn finish_pending_rollback(db_path: &Path) -> anyhow::Result<()> {
     let pending = rollback_pending_path(db_path);
-    let recorded = pending.is_file();
-    if !recorded && !(super::failed_path(db_path).is_file() && rollback_possible(db_path)) {
+    let unrecorded_rollback =
+        || super::failed_path(db_path).is_file() && rollback_possible(db_path);
+    if !(pending.is_file() || unrecorded_rollback()) {
         return Ok(());
     }
     if !previous_path(db_path).is_file() {
