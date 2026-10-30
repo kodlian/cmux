@@ -3,6 +3,7 @@ import AppKit
 import CmuxNextAgentPane
 import CmuxNextAppCore
 import CmuxNextBridge
+import CmuxNextCloud
 import CmuxNextDaemon
 import CmuxNextWorkspaceNaming
 import CmuxNextSettings
@@ -99,6 +100,10 @@ final class CaptureSceneRegistry {
             ])
         }
 
+        // The sidebar is its picture: the showcase window, then the machines, with no agent turn.
+        if definition.name == Self.cloudAgentMachinesScene {
+            return await renderAgentCloudMachines(params, definition: definition, windowID: targetWindowID)
+        }
         let turn = await DebugAgentPane.handle(["action": .string("seed_rows"), "fixture": .string("worked-turn")], services)
         guard case .object(let turnReport) = turn,
               (turnReport["rows"]?.intValue ?? 0) > 0 else {
@@ -231,6 +236,8 @@ final class CaptureSceneRegistry {
         CaptureSceneDefinition(name: "settings", description: "Showcase window with the settings destination available."),
         CaptureSceneDefinition(name: "history-narrow", description: "Narrow history destination fixture."),
         CaptureSceneDefinition(name: "cloud-start-session-ask", description: "An agent's cmux cloud start-session ask card in its chat."),
+        CaptureSceneDefinition(name: "cloud-agent-machines",
+                               description: "Two running Cloud machines an agent or a lane-pool tool made, never opened here, each with its image's own workspace."),
         CaptureSceneDefinition(name: "hints-cmd-held", description: "Command modifier hint destination."),
         CaptureSceneDefinition(name: "hints-ctrl-held", description: "Control modifier hint destination."),
         CaptureSceneDefinition(name: "workspace-auto-name",
@@ -241,6 +248,78 @@ final class CaptureSceneRegistry {
         CaptureSceneDefinition(name: "home-chief-long-draft",
                                description: "The home-chief scene with a long draft that grows the field up into the first-run panel; the panel drops what does not fit and nothing it shows runs under the field."),
     ]
+}
+
+/// Leo 2026-10-29, on agents' Cloud machines in his sidebar: "why is there all this weird stuff at the
+/// bottom of the sidebar". The account's machine list connects every Cloud machine, and each starts
+/// with a workspace from its image: this scene adds two such machines, as that list would.
+extension CaptureSceneRegistry {
+    static let cloudAgentMachinesScene = "cloud-agent-machines"
+    static let agentMachineIDs = ["capture-vm-lane-1", "capture-vm-test-2"]
+
+    /// Adds the machines to the settled showcase window, waits until the sidebar draws every
+    /// machine workspace a window took (none, once agents' machines stay out), snapshots the
+    /// window, then takes the machines away again. A workspace a window took whose row never
+    /// draws fails the scene: the picture would not show what the membership says.
+    func renderAgentCloudMachines(_ params: [String: CmuxNextSettings.JSONValue], definition: CaptureSceneDefinition,
+                                  windowID: String) async -> CmuxNextSettings.JSONValue {
+        for id in Self.agentMachineIDs { services.machines.remove(id)?.disconnect() }
+        let added = addAgentCloudMachines()
+        let shown = await CloudMove.holds(within: .seconds(10)) { [self] in
+            let rows = agentMachineRows(windowID: windowID)
+            return Set(rows.filed).isSubset(of: rows.drawn)
+        }
+        let rows = agentMachineRows(windowID: windowID)
+        let report: CmuxNextSettings.JSONValue = .object([
+            "machines": added, "in_a_window": .array(rows.filed.map { .string($0) }), "drawn": .array(rows.drawn.map { .string($0) }),
+        ])
+        guard shown else {
+            for id in Self.agentMachineIDs { services.machines.remove(id)?.disconnect() }
+            services.windows.reconcileMembership()
+            return .object(["error": .string("a machine workspace a window took never drew in its sidebar"),
+                            "scene": .string(definition.name), "scene_action": report])
+        }
+        // One more frame for the rows' layout.
+        frames.start()
+        let settled = await frames.settled(until: { true }, start: ContinuousClock.now, window: 300, deadline: 3_000)
+        let frameStats = frames.stop()
+        var snapshotParams = params
+        snapshotParams["window"] = .string(windowID)
+        let snapshot = await DebugWindowSnapshot.captureAsync(snapshotParams, services: services)
+        for id in Self.agentMachineIDs { services.machines.remove(id)?.disconnect() }
+        services.windows.reconcileMembership()
+        guard case .object(var result) = snapshot else { return snapshot }
+        result["scene"] = .string(definition.name)
+        result["description"] = .string(definition.description)
+        result["settled_ms"] = settled.map(CmuxNextSettings.JSONValue.number) ?? .null
+        result["frames"] = frameStats
+        result["scene_action"] = report
+        return .object(result)
+    }
+
+    /// The machines' workspaces a window took, and those `windowID`'s sidebar draws.
+    func agentMachineRows(windowID: String) -> (filed: [String], drawn: [String]) {
+        let workspaces = Self.agentMachineIDs.map { "ws-\($0)" }
+        let rows = Set(services.windows.controller(for: windowID)?.sidebar.model.sections.flatMap(\.workspaces).map(\.id.rawValue) ?? [])
+        return (workspaces.filter { services.windows.registry.value.owner(of: $0) != nil }, workspaces.filter(rows.contains))
+    }
+
+    func addAgentCloudMachines() -> CmuxNextSettings.JSONValue {
+        let api = services.cloud.api, binary = URL(fileURLWithPath: "/usr/bin/false")
+        let paths = CloudPaths(root: FileManager.default.temporaryDirectory.appendingPathComponent("cn-capture-cloud-machines"))
+        let hub = CloudTunnelHub(api: api, paths: paths, binary: binary, deviceName: "capture")
+        for (id, name) in zip(Self.agentMachineIDs, ["lane-vm-1", "test-vm-2"]) {
+            let link = CloudMachineLink(machineID: id, api: api, hub: hub, paths: paths, binary: binary, deviceName: "capture")
+            let session = CloudMachineSession(machine: CloudMachine(id: id, status: .running, displayName: name), link: link,
+                                              mainWork: services.mainWork)
+            services.machines.add(session)
+            session.daemon.store.apply(snapshot: DaemonTree(registryID: "s-\(id)", workspaces: [
+                WorkspaceSnapshot(id: WorkspaceHandle(rawValue: 1), key: WorkspaceKey(rawValue: "ws-\(id)"), name: "workspace-1"),
+            ]))
+        }
+        services.windows.reconcileMembership()
+        return .number(Double(Self.agentMachineIDs.count))
+    }
 }
 
 /// A real daemon workspace and agent tab for before/after auto-name captures.
