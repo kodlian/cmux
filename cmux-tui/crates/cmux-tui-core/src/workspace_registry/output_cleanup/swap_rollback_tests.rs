@@ -40,3 +40,17 @@ fn a_rollback_that_cannot_put_the_registry_back_refuses_and_finishes_next_start(
     assert_eq!(fs::read(&db_path).unwrap(), b"full");
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_failure_marker_beside_a_plain_registry_is_not_a_pending_rollback() {
+    // The failure marker alone (a cleanup that failed with the registry
+    // unchanged) never moves files: no swap stands behind it.
+    let dir = temp_dir("failed-only");
+    let db_path = dir.join("workspace-registry.sqlite3");
+    fs::write(&db_path, b"registry").unwrap();
+    fs::write(super::super::failed_path(&db_path), b"build\nreason\n").unwrap();
+    finish_pending_rollback(&db_path).unwrap();
+    assert_eq!(fs::read(&db_path).unwrap(), b"registry");
+    refuse_open_beside_backup(&db_path).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+}

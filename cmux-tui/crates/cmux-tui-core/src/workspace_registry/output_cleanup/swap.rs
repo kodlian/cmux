@@ -123,22 +123,28 @@ pub(crate) fn swap_at_open(db_path: &Path, verify_open: VerifyOpen<'_>) -> bool 
 }
 
 /// The swapped-in registry did not open: put the previous file back and
-/// never stage this registry again (the marker file). When the previous file
-/// cannot be put back (the swapped file still held open: a syncer thread of
-/// the failed open, a sharing violation on Windows), the start is refused
-/// and the rollback-pending marker makes the next start finish it before
-/// anything opens the registry.
+/// never stage this registry again (the failure marker). When the previous
+/// file cannot be put back (the swapped file still held open: a syncer
+/// thread of the failed open, a sharing violation on Windows), the start is
+/// refused, and the next start finishes the rollback before anything opens
+/// the registry ([`finish_pending_rollback`]).
 pub(crate) fn roll_back_swap(db_path: &Path, error: &anyhow::Error) -> anyhow::Result<()> {
     eprintln!(
         "cmux-tui: output cleanup: the new registry did not open ({error:#}); \
          restoring the previous registry"
     );
     write_failure_marker(db_path, &format!("the new registry did not serve: {error:#}"));
+    // On disk before the rename, so a crash or a failed rename leaves the
+    // next start a record to finish. A marker that cannot be written (a
+    // full disk) does not stop the rename: the failure marker and an
+    // unconfirmed swap are the fallback record.
     let pending = rollback_pending_path(db_path);
-    // Durable before the rename: a crash in between still finishes the
-    // rollback at the next start.
-    fs::write(&pending, format!("{error:#}\n"))
-        .with_context(|| format!("record the output cleanup rollback in {}", pending.display()))?;
+    if let Err(marker_error) = write_synced(&pending, &format!("{error:#}\n")) {
+        eprintln!(
+            "cmux-tui: output cleanup: could not record the rollback in {}: {marker_error:#}",
+            pending.display()
+        );
+    }
     for suffix in ["-wal", "-shm", "-journal"] {
         let _ = remove_if_present(&sidecar_path(db_path, suffix));
     }
@@ -157,11 +163,26 @@ pub(crate) fn roll_back_swap(db_path: &Path, error: &anyhow::Error) -> anyhow::R
     Ok(())
 }
 
-/// Finishes a rollback an earlier start could not complete (its marker):
-/// called before anything opens the registry.
+/// Writes `contents` to `path` and syncs the file and its directory.
+fn write_synced(path: &Path, contents: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    let mut file = fs::File::create(path)?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+    if let Some(parent) = path.parent() {
+        platform::sync_directory(parent)?;
+    }
+    Ok(())
+}
+
+/// Finishes a rollback an earlier start could not complete: called before
+/// anything opens the registry. The record is the rollback marker, or, when
+/// that could not be written, the failure marker beside a swap no full start
+/// confirmed (only a rollback writes the failure marker after a swap).
 pub(crate) fn finish_pending_rollback(db_path: &Path) -> anyhow::Result<()> {
     let pending = rollback_pending_path(db_path);
-    if !pending.is_file() {
+    let recorded = pending.is_file();
+    if !recorded && !(super::failed_path(db_path).is_file() && rollback_possible(db_path)) {
         return Ok(());
     }
     if !previous_path(db_path).is_file() {
