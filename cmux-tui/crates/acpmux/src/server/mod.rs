@@ -943,8 +943,9 @@ pub async fn serve_ws_until(
     loop {
         let accepted = tokio::select! {
             biased;
-            () = shutdown.requested() => break,
+            () = shutdown.requested() => { eprintln!("DIAG listener {}: requested", std::process::id()); break },
             () = shutdown.normal() => {
+                eprintln!("DIAG listener {}: normal", std::process::id());
                 shutdown.close_clients();
                 break;
             }

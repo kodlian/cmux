@@ -616,13 +616,14 @@ pub async fn run(opts: DaemonOptions) -> Result<()> {
                 // Supervisors use SIGTERM for updates and permanent stops alike. Advertise
                 // handoff: a stopped service causes one immediate retry, then normal backoff.
                 _ = next_signal(term.as_mut()) => {
+                    eprintln!("DIAG daemon {}: SIGTERM arm", std::process::id());
                     hub.restart_requested.store(true, std::sync::atomic::Ordering::SeqCst);
                 },
-                _ = next_signal(int.as_mut()) => {},
-                _ = hub.shutdown.notified() => {},
+                _ = next_signal(int.as_mut()) => { eprintln!("DIAG daemon {}: SIGINT arm", std::process::id()); },
+                _ = hub.shutdown.notified() => { eprintln!("DIAG daemon {}: notify arm", std::process::id()); },
                 // A normal stop, not a restart handoff: nothing can reach this daemon again.
-                Ok(why) = &mut home_gone => tracing::warn!("stopping: {why}"),
-                why = &mut unused => tracing::info!("stopping: {why}"),
+                Ok(why) = &mut home_gone => { eprintln!("DIAG daemon {}: home_gone arm {why}", std::process::id()); },
+                why = &mut unused => { eprintln!("DIAG daemon {}: unused arm {why}", std::process::id()); },
             }
         }
         #[cfg(not(unix))]
@@ -636,7 +637,7 @@ pub async fn run(opts: DaemonOptions) -> Result<()> {
         }
     };
     tokio::select! {
-        r = unix => { r??; }
+        r = unix => { eprintln!("DIAG daemon {}: unix server ended first", std::process::id()); r??; }
         _ = shutdown => {}
     }
     tracing::info!("shutting down");
@@ -661,6 +662,11 @@ pub async fn run(opts: DaemonOptions) -> Result<()> {
     }
     // SIGTERM handoff and explicit updates/restarts use 1012. Explicit ordinary RPC
     // shutdown and interactive interrupt use a normal WebSocket close.
+    eprintln!(
+        "DIAG daemon {} shutdown: restart_requested={}",
+        std::process::id(),
+        hub.restart_requested.load(std::sync::atomic::Ordering::SeqCst)
+    );
     if hub.restart_requested.swap(false, std::sync::atomic::Ordering::SeqCst) {
         ws_shutdown.restart();
     } else {
