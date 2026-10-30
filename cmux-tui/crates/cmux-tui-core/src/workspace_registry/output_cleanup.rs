@@ -40,8 +40,9 @@ use super::{WorkspaceRegistry, meta_value};
 pub(crate) use pruned::{PRUNED_RANGES_SCHEMA, pruned_gap};
 pub(crate) use stage::{StageControl, StageOutcome, stage_registry};
 pub(super) use swap::{
-    note_full_start, refuse_open_beside_backup, remove_previous_registry_when_started,
-    restore_interrupted_swap, roll_back_swap, rollback_possible, swap_at_open,
+    finish_pending_rollback, note_full_start, refuse_open_beside_backup,
+    remove_previous_registry_when_started, restore_interrupted_swap, roll_back_swap,
+    rollback_possible, swap_at_open,
 };
 
 /// Registry meta key set once the cleanup is done (or was not needed). The
@@ -52,6 +53,10 @@ const PREVIOUS_SUFFIX: &str = ".pre-output-cleanup";
 /// Written when a swap failed for a reason other than free space; no later
 /// start stages this registry again until the file is removed.
 const FAILED_SUFFIX: &str = ".output-cleanup-failed";
+/// Written when a rollback could not put the previous registry back (a file
+/// still held open, e.g. on Windows): no open uses the swapped registry
+/// until a later start finishes the rollback.
+const ROLLBACK_PENDING_SUFFIX: &str = ".output-cleanup-rollback";
 /// Free space beyond the staged file that both phases require.
 const DISK_MARGIN_BYTES: u64 = 1 << 30;
 const OUTPUT_KIND: &str = "terminal.output";
@@ -66,6 +71,10 @@ pub(crate) fn previous_path(db_path: &Path) -> PathBuf {
 
 pub(crate) fn failed_path(db_path: &Path) -> PathBuf {
     sidecar_path(db_path, FAILED_SUFFIX)
+}
+
+pub(crate) fn rollback_pending_path(db_path: &Path) -> PathBuf {
+    sidecar_path(db_path, ROLLBACK_PENDING_SUFFIX)
 }
 
 fn disk_margin() -> u64 {

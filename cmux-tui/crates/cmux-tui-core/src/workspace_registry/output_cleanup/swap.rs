@@ -26,7 +26,8 @@ use super::stage::{Staged, open_existing_staging, stage_segments, state, state_u
 use super::{
     DONE_META_KEY, OUTPUT_KIND, PRUNED_RANGES_SCHEMA, REBUILT_TABLES, STAGED_WORK_CHANGED,
     copied_bytes, failed_for_this_build, file_len, free_space_refusal, is_temporary, mebibytes,
-    previous_path, remove_if_present, remove_staging, staging_path, write_failure_marker,
+    previous_path, remove_if_present, remove_staging, rollback_pending_path, staging_path,
+    write_failure_marker,
 };
 use crate::platform;
 
@@ -122,28 +123,66 @@ pub(crate) fn swap_at_open(db_path: &Path, verify_open: VerifyOpen<'_>) -> bool 
 }
 
 /// The swapped-in registry did not open: put the previous file back and
-/// never stage this registry again (the marker file).
-pub(crate) fn roll_back_swap(db_path: &Path, error: &anyhow::Error) {
+/// never stage this registry again (the marker file). When the previous file
+/// cannot be put back (the swapped file still held open: a syncer thread of
+/// the failed open, a sharing violation on Windows), the start is refused
+/// and the rollback-pending marker makes the next start finish it before
+/// anything opens the registry.
+pub(crate) fn roll_back_swap(db_path: &Path, error: &anyhow::Error) -> anyhow::Result<()> {
     eprintln!(
         "cmux-tui: output cleanup: the new registry did not open ({error:#}); \
          restoring the previous registry"
     );
+    write_failure_marker(db_path, &format!("the new registry did not serve: {error:#}"));
+    let pending = rollback_pending_path(db_path);
+    // Durable before the rename: a crash in between still finishes the
+    // rollback at the next start.
+    fs::write(&pending, format!("{error:#}\n"))
+        .with_context(|| format!("record the output cleanup rollback in {}", pending.display()))?;
     for suffix in ["-wal", "-shm", "-journal"] {
         let _ = remove_if_present(&sidecar_path(db_path, suffix));
     }
-    if let Err(error) = fs::rename(previous_path(db_path), db_path) {
-        eprintln!("cmux-tui: output cleanup: restoring the previous registry failed: {error}");
-    }
+    let restored = fs::rename(previous_path(db_path), db_path);
     if let Some(parent) = db_path.parent() {
         let _ = platform::sync_directory(parent);
     }
-    write_failure_marker(db_path, &format!("the new registry did not serve: {error:#}"));
+    restored.with_context(|| {
+        format!(
+            "put the previous workspace registry {} back after a failed output cleanup; the \
+             next start tries again",
+            previous_path(db_path).display()
+        )
+    })?;
+    remove_if_present(&pending)?;
+    Ok(())
+}
+
+/// Finishes a rollback an earlier start could not complete (its marker):
+/// called before anything opens the registry.
+pub(crate) fn finish_pending_rollback(db_path: &Path) -> anyhow::Result<()> {
+    let pending = rollback_pending_path(db_path);
+    if !pending.is_file() {
+        return Ok(());
+    }
+    if !previous_path(db_path).is_file() {
+        // Already put back (the marker's removal did not happen).
+        return remove_if_present(&pending);
+    }
+    roll_back_swap(db_path, &anyhow::anyhow!("an earlier rollback could not finish"))
 }
 
 /// Refuses an open while the registry exists only as the backup of a swap
 /// (the restore of an interrupted swap failed). The error names the backup.
 pub(crate) fn refuse_open_beside_backup(db_path: &Path) -> anyhow::Result<()> {
     let previous = previous_path(db_path);
+    anyhow::ensure!(
+        !rollback_pending_path(db_path).is_file(),
+        "an output cleanup rollback of the workspace registry is unfinished; the previous \
+         registry {} could not be put back in place (see the log above). Move it to {} by hand \
+         to start this session",
+        previous.display(),
+        db_path.display()
+    );
     anyhow::ensure!(
         db_path.exists() || !previous.is_file(),
         "the workspace registry exists only as the output cleanup backup {}; it could not be \
@@ -1148,3 +1187,7 @@ fn check_counts(tx: &Transaction<'_>) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "swap_rollback_tests.rs"]
+mod rollback_tests;

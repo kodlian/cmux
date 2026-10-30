@@ -2506,11 +2506,13 @@ impl WorkspaceRegistry {
         let session_lock =
             platform::normalize_filesystem_path(session_dir.join(SESSION_WRITER_LOCK_FILE));
         let lease = SessionLease::acquire(&session_lock)?;
+        // A rollback an earlier start could not finish goes first.
+        output_cleanup::finish_pending_rollback(&db_path)?;
         if roll_back_first && output_cleanup::rollback_possible(&db_path) {
             output_cleanup::roll_back_swap(
                 &db_path,
                 &anyhow::anyhow!("the owner did not start on the new registry"),
-            );
+            )?;
         }
         // Before the orphan check: an interrupted swap is put back first.
         // The swap opens the new file through `initialize` and reads its
@@ -2592,7 +2594,8 @@ impl WorkspaceRegistry {
                 Ok(registry)
             }
             Err(error) if swapped => {
-                output_cleanup::roll_back_swap(&db_path, &error);
+                // A rollback that cannot put the file back refuses this start.
+                output_cleanup::roll_back_swap(&db_path, &error)?;
                 open_once(&mut session_guard, &mut lease)
             }
             Err(error) => Err(error),
