@@ -734,6 +734,7 @@ public final class ConversationViewController: UIViewController {
             liveGate.endPageHold()
             applyTranscriptChange(change)
         }
+        refreshReplyThread()
     }
 
     /// Applies a transcript change, after what the live gate held.
