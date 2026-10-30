@@ -88,6 +88,33 @@ import CmuxNextWakeupsTestSupport
         try await WorkspaceHoverCardScrollTests.tearDown(window, coordinator)
     }
 
+    @Test func zzDiagnoseFollow() async throws {
+        let clock = ManualClock()
+        let (list, window, coordinator, rows) = Self.sidebar(clock: clock)
+        func dump(_ tag: String) {
+            let rs = list.displayed.rows.filter { if case .workspace = $0.key { true } else { false } }
+            let ys = rs.map { "\($0.y)-\($0.maxY)" }.joined(separator: ",")
+            let anchors = rs.compactMap { r -> String? in
+                guard case .workspace(let id) = r.key, let a = list.hoverCardAnchor(for: id) else { return nil }
+                return "\(a.minY)-\(a.maxY)"
+            }.joined(separator: ",")
+            let p = coordinator.panel
+            print("H13DIAG \(tag) rows=[\(ys)] anchors=[\(anchors)] win=\(window.frame) screen=\(String(describing: window.screen?.visibleFrame)) card=\(String(describing: p?.cardFrame)) rest=\(String(describing: p?.restCardFrame)) pframe=\(String(describing: p?.frame)) morph=\(p?.activeMorph != nil) target=\(String(describing: coordinator.machine.shownTarget?.id)) listFrame=\(list.frame)")
+        }
+        dump("start")
+        _ = try await Self.showSecondRowCard(list, coordinator, clock, rows)
+        dump("shown2")
+        guard case .workspace(let id) = rows[2].key else { return }
+        let target = WorkspaceHoverCardController.targetID(id)
+        list.updateHover(list.convert(NSPoint(x: list.bounds.midX, y: (rows[2].y + rows[2].maxY) / 2), to: nil))
+        dump("hover3")
+        try await Self.settle(until: { coordinator.machine.shownTarget?.id == target })
+        dump("shown3")
+        try await Task.sleep(for: .milliseconds(800))
+        dump("later3")
+        try await WorkspaceHoverCardScrollTests.tearDown(window, coordinator)
+    }
+
     /// The row ends before the sidebar's drag thumb. Its preview touches the row, not the thumb.
     @Test func theCardTouchesItsWorkspaceRowBeforeTheDragThumb() async throws {
         let clock = ManualClock()
