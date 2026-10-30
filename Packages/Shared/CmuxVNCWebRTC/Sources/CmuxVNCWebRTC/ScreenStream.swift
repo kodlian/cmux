@@ -194,6 +194,9 @@ public protocol ScreenBackend: AnyObject, Sendable {
     func select(display index: Int)
     func handle(_ input: ScreenInput)
     func stop()
+    /// What the host tells the viewer it understands in `caps`
+    /// (``ScreenHostMessage/pixelScrollCapability``, ...); none by default.
+    var inputCapabilities: [String] { get }
     /// The most frames per second the streaming display shows (ProMotion:
     /// 120); nil when the source does not know. Read again whenever the
     /// source reports its displays.
@@ -206,6 +209,7 @@ public protocol ScreenBackend: AnyObject, Sendable {
 /// loopback) report none and keep their own pace: the stream stays at 60.
 public extension ScreenBackend {
     var maximumFrameRate: Int? { nil }
+    var inputCapabilities: [String] { [] }
     func setFrameRate(_ fps: Int) {}
 }
 
@@ -413,6 +417,7 @@ public final class ScreenStreamHost: @unchecked Sendable {
         session.lock.withLock { session.opened = true }
         log("channel open; starting \(type(of: session.backend))")
         emit(.viewerConnected)
+        sendCapabilities(session)
         session.tasks.append(Task { [weak self] in
             do {
                 try await session.backend.start(frame: { [weak self] buffer, crop in
@@ -525,11 +530,30 @@ public final class ScreenStreamHost: @unchecked Sendable {
             return
         }
         guard !viewOnly || Self.viewOnlyMessages.contains(input.t) else { return }
+        // A scroll in a unit the backend did not advertise never reaches it (40 px is not 40 lines).
+        if input.t == "scroll", let unit = input.u,
+           unit != ScreenInput.pixelUnit || !backend.inputCapabilities.contains(ScreenHostMessage.pixelScrollCapability) { return }
         backend.handle(input)
     }
 
     /// What a view-only viewer may still send: a request for a fresh frame (no input reaches the Mac).
     static let viewOnlyMessages: Set<String> = ["refresh"]
+
+    /// The `caps` message for a backend's input capabilities.
+    /// None for a view-only session (it takes no input) or a backend with none.
+    static func capabilitiesMessage(for capabilities: [String], viewOnly: Bool) -> ScreenHostMessage? {
+        guard !viewOnly, !capabilities.isEmpty else { return nil }
+        return ScreenHostMessage(t: ScreenHostMessage.capabilitiesType, s: capabilities.joined(separator: ","))
+    }
+
+    /// Tells the viewer what input this host understands, once, as its
+    /// channel opens: before the first displays message, so an older viewer
+    /// that reads any host message as displays shows the real ones last.
+    private func sendCapabilities(_ session: Session) {
+        guard let message = Self.capabilitiesMessage(for: session.backend.inputCapabilities, viewOnly: viewOnly),
+              let data = try? JSONEncoder().encode(message) else { return }
+        _ = session.link.sendText(String(decoding: data, as: UTF8.self))
+    }
 
     /// Sets the encoder and the source for the session's quality and the
     /// rate both displays agree on. True when the rate changed (the viewer
