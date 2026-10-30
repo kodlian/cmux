@@ -256,16 +256,16 @@ pub(crate) fn rollback_possible(db_path: &Path) -> bool {
 
 /// Records a full owner start (restore done) on a registry that still has
 /// the file a swap replaced.
-pub(crate) fn note_full_start(db_path: &Path) {
+pub(crate) fn note_full_start(db_path: &Path) -> anyhow::Result<()> {
     if !previous_path(db_path).exists() {
-        return;
+        return Ok(());
     }
     if !is_swapped_registry(db_path) {
         eprintln!(
             "cmux-tui: output cleanup: the registry is not the one made from {}; it stays",
             previous_path(db_path).display()
         );
-        return;
+        return Ok(());
     }
     let note = || -> anyhow::Result<()> {
         let connection = open_registry_database_with_flags(
@@ -280,11 +280,13 @@ pub(crate) fn note_full_start(db_path: &Path) {
         )?;
         Ok(())
     };
-    // Once more after a failure (a busy registry); the next full start
-    // records it otherwise, and the backup stays until then.
-    if let Err(error) = note().or_else(|_| note()) {
-        eprintln!("cmux-tui: output cleanup: could not record the start: {error:#}");
-    }
+    // Once more after a failure (a busy registry). A start that cannot
+    // record itself is not a full start: the caller refuses it before it
+    // serves, so a later failed start can never roll back a served session.
+    note().or_else(|_| note()).context(
+        "record the first full start on the output-cleaned registry (the start is refused; \
+         the next start tries again)",
+    )
 }
 
 /// At an open after a swap: the previous file goes, off the start path, once

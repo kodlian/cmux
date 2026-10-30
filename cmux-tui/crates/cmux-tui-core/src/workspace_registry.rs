@@ -2628,7 +2628,7 @@ impl WorkspaceRegistry {
         match loaded {
             Ok(loaded) => {
                 if let Some(db_path) = db_path.as_deref() {
-                    output_cleanup::note_full_start(db_path);
+                    output_cleanup::note_full_start(db_path)?;
                 }
                 Ok(loaded)
             }
