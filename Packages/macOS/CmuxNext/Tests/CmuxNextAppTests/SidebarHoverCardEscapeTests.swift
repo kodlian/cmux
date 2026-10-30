@@ -72,14 +72,17 @@ import CmuxNextWakeupsTestSupport
         let (list, window, coordinator, rows) = Self.sidebar(clock: clock)
         try #require(rows.count >= 3)
         _ = try await Self.showSecondRowCard(list, coordinator, clock, rows)
-        guard case .workspace(let id) = rows[2].key, let next = list.hoverCardAnchor(for: id) else {
-            Issue.record("the third row has no frame on screen")
+        guard case .workspace(let id) = rows[2].key else {
+            Issue.record("the third row is not a workspace")
             return
         }
         let target = WorkspaceHoverCardController.targetID(id)
         list.updateHover(list.convert(NSPoint(x: list.bounds.midX, y: (rows[2].y + rows[2].maxY) / 2), to: nil))
         try await Self.settle(until: { coordinator.machine.shownTarget?.id == target })
         try #require(coordinator.machine.shownTarget?.id == target, "the card did not move to the next row (\(coordinator.machine.phase))")
+        // The row's frame on screen now, read with the card's: the card follows its row when the
+        // window or the list moves, so a frame read before the hover can be stale on a busy runner.
+        let next = try #require(list.hoverCardAnchor(for: id), "the third row has no frame on screen")
         let card = try #require(coordinator.panel).cardFrame
         #expect(abs(card.maxY - next.maxY) <= 0.5, "the card's top \(card.maxY) is not the next row's top \(next.maxY)")
         try await WorkspaceHoverCardScrollTests.tearDown(window, coordinator)
